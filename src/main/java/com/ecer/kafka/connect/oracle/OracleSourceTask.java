@@ -110,6 +110,7 @@ public class OracleSourceTask extends SourceTask {
 
       log.info("Starting LogMiner Session");
       logMinerStartScr=logMinerStartScr+logMinerOptions+") \n; end;";
+      log.info("logMinerStartScr: " + logMinerStartScr);
       logMinerStartStmt=dbConn.prepareCall(logMinerStartScr);
       Map<String,Object> offset = context.offsetStorageReader().offset(Collections.singletonMap(LOG_MINER_OFFSET_FIELD, dbName));
       streamOffsetScn=0L;
@@ -126,6 +127,7 @@ public class OracleSourceTask extends SourceTask {
 
       if (streamOffsetScn!=0L){
         streamOffsetCtrl=streamOffsetScn;
+        log.info("lastscn_startpos: " + OracleConnectorSQL.LASTSCN_STARTPOS);
         PreparedStatement lastScnFirstPosPs=dbConn.prepareCall(OracleConnectorSQL.LASTSCN_STARTPOS);
         lastScnFirstPosPs.setLong(1, streamOffsetScn);
         lastScnFirstPosPs.setLong(2, streamOffsetScn);        
@@ -157,6 +159,7 @@ public class OracleSourceTask extends SourceTask {
 
       if (streamOffsetScn==0L){
         skipRecord=false;
+        log.info("current_db_scn_sql: " + OracleConnectorSQL.CURRENT_DB_SCN_SQL);
         currentSCNStmt=dbConn.prepareCall(OracleConnectorSQL.CURRENT_DB_SCN_SQL);
         currentScnResultSet=currentSCNStmt.executeQuery();
         while(currentScnResultSet.next()){
@@ -170,7 +173,8 @@ public class OracleSourceTask extends SourceTask {
       log.info("Commit SCN : "+streamOffsetCommitScn);
       log.info(String.format("Log Miner will start at new position SCN : %s with fetch size : %s", streamOffsetScn,config.getDbFetchSize()));
       logMinerStartStmt.setLong(1, streamOffsetScn);
-      logMinerStartStmt.execute();      
+      logMinerStartStmt.execute();
+      log.info("logMinerSelectSql: " + logMinerSelectSql);
       logMinerSelect=dbConn.prepareCall(logMinerSelectSql);
       logMinerSelect.setFetchSize(config.getDbFetchSize());
       logMinerSelect.setLong(1, streamOffsetCommitScn);

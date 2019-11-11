@@ -110,6 +110,7 @@ public class OracleSourceConnectorUtils{
 
     protected String getDbVersion() throws SQLException{
       String dbVersion ="0";
+      log.info("db_version: " + OracleConnectorSQL.DB_VERSION);
       PreparedStatement dbVersionPs = dbConn.prepareCall(OracleConnectorSQL.DB_VERSION);
       ResultSet dbVersionRs = dbVersionPs.executeQuery();
       while (dbVersionRs.next()){
@@ -137,8 +138,10 @@ public class OracleSourceConnectorUtils{
       //SchemaBuilder dataSchemaBuiler = SchemaBuilder.struct().name((config.getDbNameAlias()+DOT+owner+DOT+tableName+DOT+"Value").toLowerCase());
       SchemaBuilder dataSchemaBuiler = SchemaBuilder.struct().name("value");
       if (config.getMultitenant()) {
+          log.info("container_dictionary_sql: " + sql.getContainerDictionarySQL());
     	  mineTableCols=dbConn.prepareCall(sql.getContainerDictionarySQL());
       } else {
+          log.info("dictionary_sql: " + sql.getDictionarySQL());
           mineTableCols=dbConn.prepareCall(sql.getDictionarySQL());
       }
       mineTableCols.setString(ConnectorSQL.PARAMETER_OWNER, owner);
