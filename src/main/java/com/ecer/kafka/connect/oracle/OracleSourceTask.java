@@ -113,6 +113,7 @@ public class OracleSourceTask extends SourceTask {
       log.info("logMinerStartScr: " + logMinerStartScr);
       logMinerStartStmt=dbConn.prepareCall(logMinerStartScr);
       Map<String,Object> offset = context.offsetStorageReader().offset(Collections.singletonMap(LOG_MINER_OFFSET_FIELD, dbName));
+      log.info("offset: " + offset);
       streamOffsetScn=0L;
       streamOffsetCommitScn=0L;
       streamOffsetRowId="";
