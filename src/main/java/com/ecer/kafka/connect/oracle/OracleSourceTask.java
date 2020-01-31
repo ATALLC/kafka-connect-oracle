@@ -34,6 +34,8 @@ import java.util.Map;
 import com.ecer.kafka.connect.oracle.models.Data;
 import com.ecer.kafka.connect.oracle.models.DataSchemaStruct;
 
+import com.zaxxer.hikari.HikariConfig;
+import com.zaxxer.hikari.HikariDataSource;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.source.SourceRecord;
@@ -74,11 +76,27 @@ public class OracleSourceTask extends SourceTask {
   boolean skipRecord=true;
   private DataSchemaStruct dataSchemaStruct;
   private ConnectorSQL sql;
-  
+  private static HikariConfig hikariConfig = new HikariConfig();
+  private static HikariDataSource ds;
+
   public OracleSourceTask() throws IOException {
 	  this.sql = new ConnectorSQL();
   }
-  
+
+  private HikariDataSource setUpDataSource(OracleSourceConnectorConfig conf) {
+    hikariConfig.setJdbcUrl("jdbc:oracle:thin:@"+conf.getDbHostName()+":"+conf.getDbPort()+"/"+conf.getDbName());
+    hikariConfig.setUsername(conf.getDbUser());
+    hikariConfig.setPassword(conf.getDbUserPassword());
+    hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
+    hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
+    hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
+    return new HikariDataSource(hikariConfig);
+  }
+
+  public static Connection getConnection() throws SQLException {
+    return ds.getConnection();
+  }
+
   @Override
   public String version() {
     return VersionUtil.getVersion();
@@ -96,7 +114,8 @@ public class OracleSourceTask extends SourceTask {
   @Override
   public void start(Map<String, String> map) {
     //TODO: Do things here that are required to start your task. This could be open a connection to a database, etc.
-    config=new OracleSourceConnectorConfig(map);    
+    config=new OracleSourceConnectorConfig(map);
+    ds = setUpDataSource(config);
     topic=config.getTopic();
     dbName=config.getDbNameAlias();
     parseDmlData=config.getParseDmlData();
