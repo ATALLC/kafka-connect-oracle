@@ -1,49 +1,19 @@
 package com.ecer.kafka.connect.oracle;
 
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.BEFORE_DATA_ROW_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.COMMITSCN_POSITION_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.COMMIT_SCN_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.CSF_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.DATA_ROW_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.DOT;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.LOG_MINER_OFFSET_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.OPERATION_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.POSITION_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.ROWID_POSITION_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.ROW_ID_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.SCN_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.SEG_OWNER_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.SQL_REDO_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.TABLE_NAME_FIELD;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.TEMPORARY_TABLE;
-import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.TIMESTAMP_FIELD;
-
-import java.io.IOException;
-import java.sql.CallableStatement;
-import java.sql.Connection;
-import java.sql.PreparedStatement;
-import java.sql.ResultSet;
-import java.sql.SQLException;
-import java.sql.Timestamp;
-import java.util.ArrayList;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-
 import com.ecer.kafka.connect.oracle.models.Data;
 import com.ecer.kafka.connect.oracle.models.DataSchemaStruct;
-
-import com.zaxxer.hikari.HikariConfig;
-import com.zaxxer.hikari.HikariDataSource;
+import net.sf.jsqlparser.JSQLParserException;
 import org.apache.kafka.connect.data.Struct;
-import org.apache.kafka.connect.errors.ConnectException;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import net.sf.jsqlparser.JSQLParserException;
+import java.io.IOException;
+import java.sql.*;
+import java.util.*;
+
+import static com.ecer.kafka.connect.oracle.OracleConnectorSchema.*;
 
 /**
  *  
@@ -76,25 +46,9 @@ public class OracleSourceTask extends SourceTask {
   boolean skipRecord=true;
   private DataSchemaStruct dataSchemaStruct;
   private ConnectorSQL sql;
-  private static HikariConfig hikariConfig = new HikariConfig();
-  private static HikariDataSource ds;
 
   public OracleSourceTask() throws IOException {
 	  this.sql = new ConnectorSQL();
-  }
-
-  private HikariDataSource setUpDataSource(OracleSourceConnectorConfig conf) {
-    hikariConfig.setJdbcUrl("jdbc:oracle:thin:@"+conf.getDbHostName()+":"+conf.getDbPort()+"/"+conf.getDbName());
-    hikariConfig.setUsername(conf.getDbUser());
-    hikariConfig.setPassword(conf.getDbUserPassword());
-    hikariConfig.addDataSourceProperty("cachePrepStmts", "true");
-    hikariConfig.addDataSourceProperty("prepStmtCacheSize", "250");
-    hikariConfig.addDataSourceProperty("prepStmtCacheSqlLimit", "2048");
-    return new HikariDataSource(hikariConfig);
-  }
-
-  public static Connection getConnection() throws SQLException {
-    return ds.getConnection();
   }
 
   @Override
@@ -117,88 +71,97 @@ public class OracleSourceTask extends SourceTask {
 
   @Override
   public void start(Map<String, String> map) {
-    //TODO: Do things here that are required to start your task. This could be open a connection to a database, etc.
-    config=new OracleSourceConnectorConfig(map);
-    ds = setUpDataSource(config);
-    topic=config.getTopic();
-    dbName=config.getDbNameAlias();
-    parseDmlData=config.getParseDmlData();
-    String startSCN = config.getStartScn();
-    log.info("Oracle Kafka Connector is starting on {}",config.getDbNameAlias());
-    try {      
-      dbConn = new OracleConnection().connect(config);
-      utils = new OracleSourceConnectorUtils(dbConn, config, sql);
-      log.info("Connecting to database version {}",utils.getDbVersion());
-      logMinerSelectSql = utils.getLogMinerSelectSql();
+    boolean succeeded = false;
 
-      log.info("Starting LogMiner Session");
-      logMinerStartScr=logMinerStartScr+logMinerOptions+") \n; end;";
-      log.info("logMinerStartScr: " + logMinerStartScr);
-      Map<String,Object> offset = context.offsetStorageReader().offset(Collections.singletonMap(LOG_MINER_OFFSET_FIELD, dbName));
-      log.info("offset: " + offset);
-      streamOffsetScn=0L;
-      streamOffsetCommitScn=0L;
-      streamOffsetRowId="";
-      if (offset!=null){
-        Object lastRecordedOffset = offset.get(POSITION_FIELD);
-        Object commitScnPositionObject = offset.get(COMMITSCN_POSITION_FIELD);
-        Object rowIdPositionObject = offset.get(ROWID_POSITION_FIELD);        
-        streamOffsetScn = (lastRecordedOffset != null) ? Long.parseLong(String.valueOf(lastRecordedOffset)) : 0L;
-        streamOffsetCommitScn = (commitScnPositionObject != null) ? Long.parseLong(String.valueOf(commitScnPositionObject)) : 0L;
-        streamOffsetRowId = (rowIdPositionObject != null) ? (String) offset.get(ROWID_POSITION_FIELD) : "";
-      }      
+    while(!succeeded) {
+      //TODO: Do things here that are required to start your task. This could be open a connection to a database, etc.
+      config=new OracleSourceConnectorConfig(map);
+      topic=config.getTopic();
+      dbName=config.getDbNameAlias();
+      parseDmlData=config.getParseDmlData();
+      String startSCN = config.getStartScn();
+      log.info("Oracle Kafka Connector is starting on {}",config.getDbNameAlias());
+      try {
+        dbConn = new OracleConnection().connect(config);
+        utils = new OracleSourceConnectorUtils(dbConn, config, sql);
+        log.info("Connecting to database version {}",utils.getDbVersion());
+        logMinerSelectSql = utils.getLogMinerSelectSql();
 
-      if (streamOffsetScn!=0L){
-        streamOffsetCtrl=streamOffsetScn;
-        log.info("lastscn_startpos: " + OracleConnectorSQL.LASTSCN_STARTPOS);
-        PreparedStatement lastScnFirstPosPs=dbConn.prepareCall(OracleConnectorSQL.LASTSCN_STARTPOS);
-        lastScnFirstPosPs.setLong(1, streamOffsetScn);
-        lastScnFirstPosPs.setLong(2, streamOffsetScn);        
-        ResultSet lastScnFirstPosRSet=lastScnFirstPosPs.executeQuery();
-        while(lastScnFirstPosRSet.next()){
-          streamOffsetScn= lastScnFirstPosRSet.getLong("FIRST_CHANGE#");
-        }
-        lastScnFirstPosRSet.close();
-        lastScnFirstPosPs.close();
-        
-        //streamOffsetScn=lastScnFirstPos-1;
-        //streamOffsetScn=lastScnFirstPos;
-        log.info("Captured last SCN has first position:{}",streamOffsetScn);
-      }
-      
-      if (!startSCN.equals("")){
-        log.info("Resetting offset with specified start SCN:{}",startSCN);
-        streamOffsetScn=Long.parseLong(startSCN);
-        //streamOffsetScn-=1;
-        skipRecord=false;
-      }
-      
-      if (config.getResetOffset()){
-        log.info("Resetting offset with new SCN");
+        log.info("Starting LogMiner Session");
+        logMinerStartScr=OracleConnectorSQL.START_LOGMINER_CMD + logMinerOptions + ") \n; end;";
+        log.debug("logMinerStartScr: " + logMinerStartScr);
+        Map<String,Object> offset = context.offsetStorageReader().offset(Collections.singletonMap(LOG_MINER_OFFSET_FIELD, dbName));
+        log.debug("offset: " + offset);
         streamOffsetScn=0L;
         streamOffsetCommitScn=0L;
-        streamOffsetRowId="";        
-      }
-
-      if (streamOffsetScn==0L){
-        skipRecord=false;
-        log.info("current_db_scn_sql: " + OracleConnectorSQL.CURRENT_DB_SCN_SQL);
-        currentSCNStmt=dbConn.prepareCall(OracleConnectorSQL.CURRENT_DB_SCN_SQL);
-        currentScnResultSet=currentSCNStmt.executeQuery();
-        while(currentScnResultSet.next()){
-          streamOffsetScn=currentScnResultSet.getLong("CURRENT_SCN");
+        streamOffsetRowId="";
+        if (offset!=null){
+          Object lastRecordedOffset = offset.get(POSITION_FIELD);
+          Object commitScnPositionObject = offset.get(COMMITSCN_POSITION_FIELD);
+          Object rowIdPositionObject = offset.get(ROWID_POSITION_FIELD);
+          streamOffsetScn = (lastRecordedOffset != null) ? Long.parseLong(String.valueOf(lastRecordedOffset)) : 0L;
+          streamOffsetCommitScn = (commitScnPositionObject != null) ? Long.parseLong(String.valueOf(commitScnPositionObject)) : 0L;
+          streamOffsetRowId = (rowIdPositionObject != null) ? (String) offset.get(ROWID_POSITION_FIELD) : "";
         }
-        currentScnResultSet.close();
-        currentSCNStmt.close();        
-        log.info("Getting current scn from database {}",streamOffsetScn);
+
+        if (streamOffsetScn!=0L){
+          streamOffsetCtrl=streamOffsetScn;
+          log.debug("lastscn_startpos: " + OracleConnectorSQL.LASTSCN_STARTPOS);
+          PreparedStatement lastScnFirstPosPs=dbConn.prepareCall(OracleConnectorSQL.LASTSCN_STARTPOS);
+          lastScnFirstPosPs.setLong(1, streamOffsetScn);
+          lastScnFirstPosPs.setLong(2, streamOffsetScn);
+          ResultSet lastScnFirstPosRSet=lastScnFirstPosPs.executeQuery();
+          while(lastScnFirstPosRSet.next()){
+            streamOffsetScn= lastScnFirstPosRSet.getLong("FIRST_CHANGE#");
+          }
+          lastScnFirstPosRSet.close();
+          lastScnFirstPosPs.close();
+
+          //streamOffsetScn=lastScnFirstPos-1;
+          //streamOffsetScn=lastScnFirstPos;
+          log.info("Captured last SCN has first position:{}",streamOffsetScn);
+        }
+
+        if (!startSCN.equals("")){
+          log.info("Resetting offset with specified start SCN:{}",startSCN);
+          streamOffsetScn=Long.parseLong(startSCN);
+          //streamOffsetScn-=1;
+          skipRecord=false;
+        }
+
+        if (config.getResetOffset()){
+          log.info("Resetting offset with new SCN");
+          streamOffsetScn=0L;
+          streamOffsetCommitScn=0L;
+          streamOffsetRowId="";
+        }
+
+        if (streamOffsetScn==0L){
+          skipRecord=false;
+          log.debug("current_db_scn_sql: " + OracleConnectorSQL.CURRENT_DB_SCN_SQL);
+          currentSCNStmt=dbConn.prepareCall(OracleConnectorSQL.CURRENT_DB_SCN_SQL);
+          currentScnResultSet=currentSCNStmt.executeQuery();
+          while(currentScnResultSet.next()){
+            streamOffsetScn=currentScnResultSet.getLong("CURRENT_SCN");
+          }
+          currentScnResultSet.close();
+          currentSCNStmt.close();
+          log.info("Getting current scn from database {}",streamOffsetScn);
+        }
+        //streamOffsetScn+=1;
+        log.debug("Commit SCN : "+streamOffsetCommitScn);
+        log.info(String.format("Log Miner will start at new position SCN : %s with fetch size : %s", streamOffsetScn,config.getDbFetchSize()));
+        logMinerData = createLogminerDataResultSet(streamOffsetScn, dbConn);
+        log.info("Logminer started successfully");
+        succeeded = true;
+      } catch(SQLException e){
+        log.error("Error at database tier, Please check: "+e.toString());
+        try {
+          Thread.sleep(5000);
+        } catch (InterruptedException ex) {
+          ex.printStackTrace();
+        }
       }
-      //streamOffsetScn+=1;
-      log.info("Commit SCN : "+streamOffsetCommitScn);
-      log.info(String.format("Log Miner will start at new position SCN : %s with fetch size : %s", streamOffsetScn,config.getDbFetchSize()));
-      logMinerData = createLogminerDataResultSet(streamOffsetScn, dbConn);
-      log.info("Logminer started successfully");
-    }catch(SQLException e){
-      throw new ConnectException("Error at database tier, Please check : "+e.toString());
     }
   }
 
@@ -206,7 +169,7 @@ public class OracleSourceTask extends SourceTask {
     logMinerStartStmt=connection.prepareCall(logMinerStartScr);
     logMinerStartStmt.setLong(1, streamOffsetScn);
     logMinerStartStmt.execute();
-    log.info("logMinerSelectSql: " + logMinerSelectSql);
+    log.debug("logMinerSelectSql: " + logMinerSelectSql);
     logMinerSelect=connection.prepareCall(logMinerSelectSql);
     logMinerSelect.setFetchSize(config.getDbFetchSize());
     logMinerSelect.setLong(1, streamOffsetCommitScn);
