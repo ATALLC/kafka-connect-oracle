@@ -106,9 +106,13 @@ public class OracleSourceTask extends SourceTask {
     return dbConn;
   }
 
-  public static void closeDbConn() throws SQLException{
-    logMinerSelect.cancel();
-    dbConn.close();
+  public static void closeDbConn() {
+    try {
+      logMinerSelect.cancel();
+      dbConn.close();
+    } catch (SQLException e) {
+      log.error("Failed to close connection: {}", e.getMessage());
+    }
   }
 
   @Override
@@ -130,7 +134,6 @@ public class OracleSourceTask extends SourceTask {
       log.info("Starting LogMiner Session");
       logMinerStartScr=logMinerStartScr+logMinerOptions+") \n; end;";
       log.info("logMinerStartScr: " + logMinerStartScr);
-      logMinerStartStmt=dbConn.prepareCall(logMinerStartScr);
       Map<String,Object> offset = context.offsetStorageReader().offset(Collections.singletonMap(LOG_MINER_OFFSET_FIELD, dbName));
       log.info("offset: " + offset);
       streamOffsetScn=0L;
@@ -192,18 +195,35 @@ public class OracleSourceTask extends SourceTask {
       //streamOffsetScn+=1;
       log.info("Commit SCN : "+streamOffsetCommitScn);
       log.info(String.format("Log Miner will start at new position SCN : %s with fetch size : %s", streamOffsetScn,config.getDbFetchSize()));
-      logMinerStartStmt.setLong(1, streamOffsetScn);
-      logMinerStartStmt.execute();
-      log.info("logMinerSelectSql: " + logMinerSelectSql);
-      logMinerSelect=dbConn.prepareCall(logMinerSelectSql);
-      logMinerSelect.setFetchSize(config.getDbFetchSize());
-      logMinerSelect.setLong(1, streamOffsetCommitScn);
-      logMinerData=logMinerSelect.executeQuery();
+      logMinerData = createLogminerDataResultSet(streamOffsetScn, dbConn);
       log.info("Logminer started successfully");
     }catch(SQLException e){
       throw new ConnectException("Error at database tier, Please check : "+e.toString());
     }
-  }    
+  }
+
+  private ResultSet createLogminerDataResultSet(Long streamOffsetScn, Connection connection) throws SQLException {
+    logMinerStartStmt=connection.prepareCall(logMinerStartScr);
+    logMinerStartStmt.setLong(1, streamOffsetScn);
+    logMinerStartStmt.execute();
+    log.info("logMinerSelectSql: " + logMinerSelectSql);
+    logMinerSelect=connection.prepareCall(logMinerSelectSql);
+    logMinerSelect.setFetchSize(config.getDbFetchSize());
+    logMinerSelect.setLong(1, streamOffsetCommitScn);
+    return logMinerSelect.executeQuery();
+  }
+
+  private ResultSet createLogminerDataResultSetOnPoll() {
+    Map<String,Object> offset = context.offsetStorageReader().offset(Collections.singletonMap(LOG_MINER_OFFSET_FIELD, dbName));
+    Object lastRecordedOffset = offset.get(POSITION_FIELD);
+    Long offsetSCN = (lastRecordedOffset != null) ? Long.parseLong(String.valueOf(lastRecordedOffset)) : 0L;
+    try {
+      return createLogminerDataResultSet(offsetSCN, new OracleConnection().connect(config));
+    } catch (SQLException e) {
+      log.error("Failed to recreate logminer resultSet: {}", e.getMessage());
+      return null;
+    }
+  }
 
   @Override
   public List<SourceRecord> poll() throws InterruptedException {
@@ -211,61 +231,76 @@ public class OracleSourceTask extends SourceTask {
     String sqlX="";
     try {
       ArrayList<SourceRecord> records = new ArrayList<>();
-      while(!this.closed && logMinerData.next()){
-    	  if (log.isDebugEnabled()) {
-    		  logRawMinerData();
-    	  }
-        Long scn=logMinerData.getLong(SCN_FIELD);
-        Long commitScn=logMinerData.getLong(COMMIT_SCN_FIELD);
-        String rowId=logMinerData.getString(ROW_ID_FIELD);
-        boolean contSF = logMinerData.getBoolean(CSF_FIELD);
-        if (skipRecord){
-          if ((scn.equals(streamOffsetCtrl))&&(commitScn.equals(streamOffsetCommitScn))&&(rowId.equals(streamOffsetRowId))&&(!contSF)){
-            skipRecord=false;
+      if (logMinerData != null) {
+        // && logMinerData != null
+        while (!this.closed && logMinerData.next()) {
+          if (log.isDebugEnabled()) {
+            logRawMinerData();
           }
-          log.info("Skipping data with scn :{} Commit Scn :{} Rowid :{}",scn,commitScn,rowId);
-          continue;
+          Long scn = logMinerData.getLong(SCN_FIELD);
+          Long commitScn = logMinerData.getLong(COMMIT_SCN_FIELD);
+          String rowId = logMinerData.getString(ROW_ID_FIELD);
+          boolean contSF = logMinerData.getBoolean(CSF_FIELD);
+          if (skipRecord) {
+            if ((scn.equals(streamOffsetCtrl)) && (commitScn.equals(streamOffsetCommitScn)) && (rowId.equals(streamOffsetRowId)) && (!contSF)) {
+              skipRecord = false;
+            }
+            log.info("Skipping data with scn :{} Commit Scn :{} Rowid :{}", scn, commitScn, rowId);
+            continue;
+          }
+          //log.info("Data :"+scn+" Commit Scn :"+commitScn);
+
+          ix++;
+
+          //String containerId = logMinerData.getString(SRC_CON_ID_FIELD);
+          //log.info("logminer event from container {}", containerId);
+          String segOwner = logMinerData.getString(SEG_OWNER_FIELD);
+          String segName = logMinerData.getString(TABLE_NAME_FIELD);
+          String sqlRedo = logMinerData.getString(SQL_REDO_FIELD);
+          if (sqlRedo.contains(TEMPORARY_TABLE)) continue;
+
+          while (contSF) {
+            logMinerData.next();
+            sqlRedo += logMinerData.getString(SQL_REDO_FIELD);
+            contSF = logMinerData.getBoolean(CSF_FIELD);
+          }
+          sqlX = sqlRedo;
+          Timestamp timeStamp = logMinerData.getTimestamp(TIMESTAMP_FIELD);
+          String operation = logMinerData.getString(OPERATION_FIELD);
+          Data row = new Data(scn, segOwner, segName, sqlRedo, timeStamp, operation);
+          topic = config.getTopic().equals("") ? (config.getDbNameAlias() + DOT + row.getSegOwner() + DOT + row.getSegName()).toUpperCase() : topic;
+          //log.info(String.format("Fetched %s rows from database %s ",ix,config.getDbNameAlias())+" "+row.getTimeStamp()+" "+row.getSegName()+" "+row.getScn()+" "+commitScn);
+          if (ix % 100 == 0)
+            log.info(String.format("Fetched %s rows from database %s ", ix, config.getDbNameAlias()) + " " + row.getTimeStamp());
+          dataSchemaStruct = utils.createDataSchema(segOwner, segName, sqlRedo, operation);
+          records.add(new SourceRecord(sourcePartition(), sourceOffset(scn, commitScn, rowId), topic, dataSchemaStruct.getDmlRowSchema(), setValueV2(row, dataSchemaStruct)));
+          streamOffsetScn = scn;
+          return records;
         }
-        //log.info("Data :"+scn+" Commit Scn :"+commitScn);
-
-        ix++;
-     
-        //String containerId = logMinerData.getString(SRC_CON_ID_FIELD);
-        //log.info("logminer event from container {}", containerId);
-        String segOwner = logMinerData.getString(SEG_OWNER_FIELD); 
-        String segName = logMinerData.getString(TABLE_NAME_FIELD);
-        String sqlRedo = logMinerData.getString(SQL_REDO_FIELD);
-        if (sqlRedo.contains(TEMPORARY_TABLE)) continue;
-
-        while(contSF){
-          logMinerData.next();
-          sqlRedo +=  logMinerData.getString(SQL_REDO_FIELD);
-          contSF = logMinerData.getBoolean(CSF_FIELD);
-        } 
-        sqlX=sqlRedo;        
-        Timestamp timeStamp=logMinerData.getTimestamp(TIMESTAMP_FIELD);
-        String operation = logMinerData.getString(OPERATION_FIELD);
-        Data row = new Data(scn, segOwner, segName, sqlRedo,timeStamp,operation);
-        topic = config.getTopic().equals("") ? (config.getDbNameAlias()+DOT+row.getSegOwner()+DOT+row.getSegName()).toUpperCase() : topic;
-        //log.info(String.format("Fetched %s rows from database %s ",ix,config.getDbNameAlias())+" "+row.getTimeStamp()+" "+row.getSegName()+" "+row.getScn()+" "+commitScn);
-        if (ix % 100 == 0) log.info(String.format("Fetched %s rows from database %s ",ix,config.getDbNameAlias())+" "+row.getTimeStamp());
-        dataSchemaStruct = utils.createDataSchema(segOwner, segName, sqlRedo,operation);        
-        records.add(new SourceRecord(sourcePartition(), sourceOffset(scn,commitScn,rowId), topic,  dataSchemaStruct.getDmlRowSchema(), setValueV2(row,dataSchemaStruct)));                          
-        streamOffsetScn=scn;
-        return records;
+        log.info("Logminer stoppped successfully");
+      } else {
+        log.error("logMinerData was null");
+        handlePollFailure();
       }
-      
-      log.info("Logminer stoppped successfully");       
+
     } catch (SQLException e){
       log.error("SQL error during poll",e );
-    }catch(JSQLParserException e){
+      handlePollFailure();
+    } catch(JSQLParserException e){
       log.error("SQL parser error during poll ", e);
-    }
-    catch(Exception e){
+      handlePollFailure();
+    } catch(Exception e){
       log.error("Error during poll on topic {} SQL :{}", topic, sqlX, e);
+      handlePollFailure();
     }
     return null;
     
+  }
+
+  private void handlePollFailure() throws InterruptedException {
+    closeDbConn();
+    logMinerData = createLogminerDataResultSetOnPoll();
+    Thread.sleep(5000);
   }
 
   @Override
