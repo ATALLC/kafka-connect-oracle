@@ -190,6 +190,7 @@ public class OracleSourceTask extends SourceTask {
 
   @Override
   public List<SourceRecord> poll() throws InterruptedException {
+    log.info("Polling...");
     //TODO: Create SourceRecord objects that will be sent the kafka cluster. 
     String sqlX="";
     try {
@@ -197,6 +198,7 @@ public class OracleSourceTask extends SourceTask {
       if (logMinerData != null) {
         // && logMinerData != null
         while (!this.closed && logMinerData.next()) {
+          log.info("Found more log data...");
           if (log.isDebugEnabled()) {
             logRawMinerData();
           }
@@ -261,6 +263,7 @@ public class OracleSourceTask extends SourceTask {
   }
 
   private void handlePollFailure() throws InterruptedException {
+    log.info("Handling polling failure...");
     closeDbConn();
     logMinerData = createLogminerDataResultSetOnPoll();
     Thread.sleep(5000);
