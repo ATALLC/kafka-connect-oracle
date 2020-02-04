@@ -79,15 +79,14 @@ public class OracleSourceConnectorUtils{
     private final ConnectorSQL sql;
 
     OracleSourceConnectorConfig config;
-    Connection dbConn;
+//    Connection dbConn;
     CallableStatement mineTables;
     CallableStatement mineTableCols;
     ResultSet mineTableColsResultSet;
     ResultSet mineTablesResultSet;
 
-    public OracleSourceConnectorUtils(Connection Conn,OracleSourceConnectorConfig Config, ConnectorSQL sql)throws SQLException {
+    public OracleSourceConnectorUtils(OracleSourceConnectorConfig Config, ConnectorSQL sql)throws SQLException {
     	this.sql = sql;
-        this.dbConn=Conn;
         this.config=Config;
         parseTableWhiteList();
     }
@@ -108,10 +107,10 @@ public class OracleSourceConnectorUtils{
         return tableRecordSchema.get(tableName);
     }
 
-    protected String getDbVersion() throws SQLException{
+    protected String getDbVersion(Connection connection) throws SQLException{
       String dbVersion ="0";
       log.info("db_version: " + OracleConnectorSQL.DB_VERSION);
-      PreparedStatement dbVersionPs = dbConn.prepareCall(OracleConnectorSQL.DB_VERSION);
+      PreparedStatement dbVersionPs = connection.prepareCall(OracleConnectorSQL.DB_VERSION);
       ResultSet dbVersionRs = dbVersionPs.executeQuery();
       while (dbVersionRs.next()){
         dbVersion = dbVersionRs.getString("VERSION");
@@ -133,16 +132,16 @@ public class OracleSourceConnectorUtils{
         logMinerSelectSql+=logMinerSelectWhereStmt;
     }
 
-    protected void loadTable(String owner,String tableName,String operation) throws SQLException{
+    protected void loadTable(String owner,String tableName,String operation, Connection connection) throws SQLException{
       log.info("Getting dictionary details for table : {}",tableName);
       //SchemaBuilder dataSchemaBuiler = SchemaBuilder.struct().name((config.getDbNameAlias()+DOT+owner+DOT+tableName+DOT+"Value").toLowerCase());
       SchemaBuilder dataSchemaBuiler = SchemaBuilder.struct().name("value");
       if (config.getMultitenant()) {
           log.info("container_dictionary_sql: " + sql.getContainerDictionarySQL());
-    	  mineTableCols=dbConn.prepareCall(sql.getContainerDictionarySQL());
+    	  mineTableCols=connection.prepareCall(sql.getContainerDictionarySQL());
       } else {
-          log.info("dictionary_sql: " + sql.getDictionarySQL());
-          mineTableCols=dbConn.prepareCall(sql.getDictionarySQL());
+//          log.info("dictionary_sql: " + sql.getDictionarySQL());
+          mineTableCols=connection.prepareCall(sql.getDictionarySQL());
       }
       mineTableCols.setString(ConnectorSQL.PARAMETER_OWNER, owner);
       mineTableCols.setString(ConnectorSQL.PARAMETER_TABLE_NAME, tableName);
@@ -296,7 +295,7 @@ public class OracleSourceConnectorUtils{
     }
 
 
-    protected DataSchemaStruct createDataSchema(String owner,String tableName,String sqlRedo,String operation) throws Exception{
+    protected DataSchemaStruct createDataSchema(String owner,String tableName,String sqlRedo,String operation, Connection connection) throws Exception{
 
       Schema dataSchema=EMPTY_SCHEMA;
       Struct dataStruct = null;
@@ -309,7 +308,7 @@ public class OracleSourceConnectorUtils{
           if (!tableName.matches("^[\\w.-]+$")){
             throw new ConnectException("Invalid table name "+tableName+" for kafka topic.Check table name which must consist only a-z, A-Z, '0-9', ., - and _");
           }
-          loadTable(owner, tableName,operation);
+          loadTable(owner, tableName, operation, connection);
         }
 
         Map<String,LinkedHashMap<String,String>> allDataMap = parseSql(owner, tableName, sqlRedo);
