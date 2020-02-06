@@ -30,6 +30,7 @@ public class OracleSourceTask extends SourceTask {
     public OracleSourceConnectorConfig config;
     private OracleSourceConnectorUtils utils;
     private static Connection dbConn;
+    private static Connection previousDbConn;
     String logMinerOptions = OracleConnectorSQL.LOGMINER_START_OPTIONS;
     String logMinerStartScr = OracleConnectorSQL.START_LOGMINER_CMD;
     static CallableStatement logMinerStartStmt = null;
@@ -45,6 +46,7 @@ public class OracleSourceTask extends SourceTask {
     boolean skipRecord = true;
     private DataSchemaStruct dataSchemaStruct;
     private ConnectorSQL sql;
+    static private boolean dbConnInvalidated = false;
 
     public OracleSourceTask() throws IOException {
         this.sql = new ConnectorSQL();
@@ -59,19 +61,25 @@ public class OracleSourceTask extends SourceTask {
         return dbConn;
     }
 
-    public static void closeDbConn() {
+    private static void closePreviousDbConn() {
         log.info("trying to close dbConn");
         try {
-            logMinerSelect.cancel();
-            log.info("Completed select cancel");
-            logMinerStartStmt.cancel();
-            log.info("Completed statement cancel");
+//            dbConn.prepareCall("DBMS_LOGMNR.END_LOGMNR;").execute();
+////            logMinerSelect.cancel();
+////            log.info("Completed select cancel");
+////            logMinerStartStmt.cancel();
+////            log.info("Completed statement cancel");
             dbConn.close();
             log.info("Closed dbConn successfully");
         } catch (SQLException e) {
             log.error("Failed to close connection: {}", e.getMessage());
         }
         log.info("Finished closing dbConn");
+    }
+
+    public static void invalidateDbConn() {
+        previousDbConn = dbConn;
+        dbConnInvalidated = true;
     }
 
     @Override
@@ -193,6 +201,11 @@ public class OracleSourceTask extends SourceTask {
         //TODO: Create SourceRecord objects that will be sent the kafka cluster.
         String sqlX = "";
         try {
+            if (dbConnInvalidated) {
+                closePreviousDbConn();
+                createNewConnection();
+                dbConnInvalidated = false;
+            }
             ArrayList<SourceRecord> records = new ArrayList<>();
             if (logMinerData != null) {
                 // && logMinerData != null
@@ -261,14 +274,18 @@ public class OracleSourceTask extends SourceTask {
     }
 
     private void handlePollFailure() throws InterruptedException {
-        closeDbConn();
+        closePreviousDbConn();
+        createNewConnection();
+        Thread.sleep(5000);
+    }
+
+    private void createNewConnection() {
         try {
             dbConn = new OracleConnection().connect(config);
             logMinerData = createLogminerDataResultSetOnPoll(dbConn);
         } catch (SQLException e) {
             log.error("Failed to recreate logminer resultSet: {}", e.getMessage());
         }
-        Thread.sleep(5000);
     }
 
     @Override
