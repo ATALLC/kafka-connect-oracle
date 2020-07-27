@@ -21,9 +21,15 @@ public class OracleSourceConnector extends SourceConnector {
 
   @Override
   public void start(Map<String, String> map) {
-    config = new OracleSourceConnectorConfig(map);    
-    
-    
+    config = new OracleSourceConnectorConfig(map);
+
+    Runtime.getRuntime().addShutdownHook(new Thread() {
+      public void run() {
+        OracleSourceConnector.this.stop();
+        System.out.println("Shutdown Hook is running !");
+      }
+    });
+
     String dbName = config.getDbName();    
     if (dbName.equals("")){
       throw new ConnectException("Missing Db Name property");
