@@ -26,6 +26,7 @@ public class OracleSourceConnector extends SourceConnector {
     Runtime.getRuntime().addShutdownHook(new Thread() {
       public void run() {
         OracleSourceConnector.this.stop();
+        OracleConnection.close();
         System.out.println("Shutdown Hook is running !");
       }
     });

@@ -30,4 +30,8 @@ public class OracleConnection{
         }
         return OracleConnection.ds.getConnection();
     }
+
+    public static void close() {
+        ds.close();
+    }
 }

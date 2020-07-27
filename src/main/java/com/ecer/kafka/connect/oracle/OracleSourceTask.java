@@ -77,6 +77,10 @@ public class OracleSourceTask extends SourceTask {
         log.info("Finished closing dbConn");
     }
 
+    public static void closeConnectionPool() {
+       OracleConnection.close();
+    }
+
     public static void invalidateDbConn() {
         previousDbConn = dbConn;
         dbConnInvalidated = true;
