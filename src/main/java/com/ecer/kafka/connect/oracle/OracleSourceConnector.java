@@ -1,5 +1,6 @@
 package com.ecer.kafka.connect.oracle;
 
+import java.sql.SQLException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,6 +26,11 @@ public class OracleSourceConnector extends SourceConnector {
 
     Runtime.getRuntime().addShutdownHook(new Thread() {
       public void run() {
+        try {
+          OracleSourceTask.closeConnectionPool();
+        } catch (SQLException e) {
+          throw new RuntimeException(e);
+        }
         OracleSourceConnector.this.stop();
         OracleConnection.close();
         System.out.println("Shutdown Hook is running !");

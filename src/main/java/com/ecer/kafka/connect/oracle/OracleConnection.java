@@ -7,12 +7,16 @@ import java.sql.Connection;
 import java.sql.DriverManager;
 import java.sql.SQLException;
 
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+
 /**
  *  
  * @author Erdem Cer (erdemcer@gmail.com)
  */
 
 public class OracleConnection{
+    static final Logger log = LoggerFactory.getLogger(OracleConnection.class);
     private static HikariDataSource ds;
     private static OracleSourceConnectorConfig oracleConfig;
 
@@ -32,6 +36,12 @@ public class OracleConnection{
     }
 
     public static void close() {
-        ds.close();
+        log.info("Trying to close Hikari data source");
+        try {
+            ds.close();
+        }
+        catch (Exception e) {
+            log.info("Got an error while trying to close data source");
+        }
     }
 }
