@@ -77,8 +77,7 @@ public class OracleSourceTask extends SourceTask {
         log.info("Finished closing dbConn");
     }
 
-    public static void closeConnectionPool() throws SQLException {
-        dbConn.close();
+    public static void closeConnectionPool() {
         OracleConnection.close();
     }
 
