@@ -3,6 +3,7 @@ package com.ecer.kafka.connect.oracle;
 import com.ecer.kafka.connect.oracle.models.Data;
 import com.ecer.kafka.connect.oracle.models.DataSchemaStruct;
 import net.sf.jsqlparser.JSQLParserException;
+import org.apache.kafka.connect.data.SchemaBuilder;
 import org.apache.kafka.connect.data.Struct;
 import org.apache.kafka.connect.source.SourceRecord;
 import org.apache.kafka.connect.source.SourceTask;
@@ -248,12 +249,18 @@ public class OracleSourceTask extends SourceTask {
                     Timestamp timeStamp = logMinerData.getTimestamp(TIMESTAMP_FIELD);
                     String operation = logMinerData.getString(OPERATION_FIELD);
                     Data row = new Data(scn, segOwner, segName, sqlRedo, timeStamp, operation);
-                    topic = config.getTopic().equals("") ? (config.getDbNameAlias() + DOT + row.getSegOwner() + DOT + row.getSegName()).toUpperCase() : topic;
+                    topic = config.getTopic().equals("") ? row.getSegOwner().toUpperCase() : topic;
                     //log.info(String.format("Fetched %s rows from database %s ",ix,config.getDbNameAlias())+" "+row.getTimeStamp()+" "+row.getSegName()+" "+row.getScn()+" "+commitScn);
                     if (ix % 100 == 0)
                         log.info(String.format("Fetched %s rows from database %s ", ix, config.getDbNameAlias()) + " " + row.getTimeStamp());
                     dataSchemaStruct = utils.createDataSchema(segOwner, segName, sqlRedo, operation, dbConn);
-                    records.add(new SourceRecord(sourcePartition(), sourceOffset(scn, commitScn, rowId), topic, dataSchemaStruct.getDmlRowSchema(), setValueV2(row, dataSchemaStruct)));
+                    records.add(new SourceRecord(sourcePartition(),
+                            sourceOffset(scn, commitScn, rowId),
+                            topic,
+                            SchemaBuilder.string(),
+                            row.getSegOwner() + DOT + row.getSegName(),
+                            dataSchemaStruct.getDmlRowSchema(),
+                            setValueV2(row, dataSchemaStruct)));
                     streamOffsetScn = scn;
                     return records;
                 }
